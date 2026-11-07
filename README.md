@@ -43,10 +43,12 @@ python run_simulation.py     # transport, comparison, results/oktavian_al.png
 The plot above is
 
 ```bash
-python run_simulation.py --compare endf-b8.1 jeff-4.0 jendl-5.0 fendl-3.2d
+python run_simulation.py --compare endf-b8.1
 ```
 
-Each case is 10 million source neutrons, about 5 seconds.
+The first case, the evaluation under test, is drawn thick and on top; the
+references are fainter lines behind it. Each case is 10 million source
+neutrons, about 5 seconds.
 
 ## Testing your own evaluation
 

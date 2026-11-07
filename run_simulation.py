@@ -362,15 +362,21 @@ def plot(experiment, results, out):
         lines = []
         for i, case in enumerate(results):
             calc, err = case[particle]["value"], case[particle]["error"]
-            colour = f"C{i}"
-            top.stairs(calc, mev, color=colour, lw=1.4, label=case["label"])
+            # The first case is the evaluation under test: drawn thick, red and
+            # on top. The reference libraries are thinner and fainter behind it.
+            under_test = i == 0
+            colour = "C3" if under_test else ["C0", "C2", "C4", "C1", "C5", "C6"][(i - 1) % 6]
+            style = ({"lw": 2.0, "alpha": 1.0, "zorder": 4} if under_test
+                     else {"lw": 1.0, "alpha": 0.7, "zorder": 3})
+            top.stairs(calc, mev, color=colour, label=case["label"], **style)
             # The Monte Carlo statistical error, +/- 1 sigma. If it is visibly
             # wide anywhere, run more histories (--particles).
             top.stairs([c + e for c, e in zip(calc, err)], mev,
                        baseline=[max(c - e, 0) for c, e in zip(calc, err)],
-                       fill=True, color=colour, alpha=0.25, lw=0)
+                       fill=True, color=colour, alpha=0.25, lw=0, zorder=style["zorder"])
             ce = case[particle]["c_over_e"]
-            bottom.stairs([math.nan if v is None else v for v in ce], mev, color=colour)
+            bottom.stairs([math.nan if v is None else v for v in ce], mev, color=colour,
+                          **style)
             fit = case[particle]["fit"]
             lines.append(f"{case['label'][:28]:28s} {fit['chi2_per_bin']:9.3g} "
                          f"{fit['integral_c_over_e']:6.3f} {fit['bin_deviation_percent']:5.0f}%")
