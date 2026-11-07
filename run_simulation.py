@@ -383,7 +383,8 @@ def plot(experiment, results, out):
         units = "per unit lethargy" if particle == "neutron" else "per MeV"
         top.set(yscale="log", title=f"{particle.capitalize()} leakage, OKTAVIAN {LABEL}",
                 ylabel=f"leakage {units}\nper source neutron")
-        top.legend(fontsize=8, loc="upper right")
+        # Neutrons: top left, clear of the 14 MeV peak. Photons: top right.
+        top.legend(fontsize=8, loc="upper left" if particle == "neutron" else "upper right")
         header = f"{'':28s} {'chi2/N':>9s} {'C/E':>6s} {'dev':>6s}"
         top.text(0.02, 0.03, "\n".join([header] + lines), transform=top.transAxes,
                  fontsize=7.5, family="monospace", va="bottom",
