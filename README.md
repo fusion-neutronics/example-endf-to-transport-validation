@@ -42,13 +42,19 @@ The transport takes about a second for a million source neutrons.
 
 ## Where the data comes from
 
-Nothing third party is stored in this repository. Each input is downloaded on
-your machine into `downloads/` and checked against a pinned sha256.
+The three ENDF evaluations are committed in `nuclear_data/`, so the conversion
+needs no download:
 
-* **TENDL-2025** neutron sublibrary, `tendl.imperial.ac.uk`. TENDL publishes it
-  as one archive of about 3.5 GB, so the first run downloads all of it and
-  extracts only `n-Al027.tendl`.
-* **ENDF/B-VIII.1** photoatomic and atomic relaxation sublibraries, NNDC.
+* `n-Al027.tendl`: **TENDL-2025** neutron evaluation of Al27, from
+  `tendl.imperial.ac.uk`, licensed CC-BY-4.0 (A.J. Koning et al., TENDL-2025).
+  Unmodified copy from the official `TENDL-n.tgz` archive.
+* `photoat-013_Al_000.endf` and `atom-013_Al_000.endf`: **ENDF/B-VIII.1**
+  photoatomic and atomic relaxation evaluations of Al, from the NNDC
+  (`nndc.bnl.gov/endf-releases`). Unmodified copies from the official archives.
+
+The measurements are downloaded at run time into `downloads/` and checked
+against pinned sha256 values:
+
 * **OKTAVIAN measurements**, JAERI-M 94-014 (Maekawa et al., 1994, chapters 3
   and 4), from the FENDL-2 benchmark sublibrary as mirrored by the OECD/NEA.
   The files are scanned report pages. The script undoes the OCR substitutions
