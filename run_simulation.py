@@ -91,7 +91,7 @@ MEASURED_PINS = {
 # ---------------------------------------------------------------------------
 
 R_BIG = 1.0e5
-PARTICLES = 1_000_000
+PARTICLES = 10_000_000
 
 # The measurements (FENDL-2 benchmark sublibrary, NEA mirror), pinned by sha256.
 OKTAVIAN = ("https://www.oecd-nea.org/dbforms/data/eva/evatapes/fendl_20/"
@@ -287,28 +287,45 @@ g_fit = goodness_of_fit(g_calc, g_calc_err, g_meas, g_err, g_width)
 # Plot: spectra on top, calculated / experiment below.
 fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharex="col",
                          gridspec_kw={"height_ratios": [3, 1]})
-for col, (name, edges, calc, meas, err, units, log_x, fit) in enumerate([
-    ("Neutron", n_edges, n_calc, n_meas, n_err, "per unit lethargy", True, n_fit),
-    ("Photon", g_edges, g_calc, g_meas, g_err, "per MeV", False, g_fit),
+def mc_error(calc, calc_err):
+    """Median and largest Monte Carlo relative error (1 sigma) over scored bins."""
+    rel = sorted(e / c for c, e in zip(calc, calc_err) if c > 0)
+    return rel[len(rel) // 2], rel[-1]
+
+
+for col, (name, edges, calc, calc_err, meas, err, units, log_x, fit) in enumerate([
+    ("Neutron", n_edges, n_calc, n_calc_err, n_meas, n_err, "per unit lethargy", True, n_fit),
+    ("Photon", g_edges, g_calc, g_calc_err, g_meas, g_err, "per MeV", False, g_fit),
 ]):
     mev = [e / 1e6 for e in edges]
     mid = [(a + b) / 2 for a, b in zip(mev, mev[1:])]
     top, bottom = axes[0][col], axes[1][col]
     top.errorbar(mid, meas, yerr=err, fmt="o", ms=3, color="black", label="OKTAVIAN measurement")
     top.stairs(calc, mev, color=f"C{col}", lw=1.5, label=f"yamc + TENDL-2025 {', '.join(COMPOSITION)}")
+    # The Monte Carlo statistical error, +/- 1 sigma, as a shaded band. If it is
+    # visibly wide anywhere, run more histories (PARTICLES at the top).
+    top.stairs([c + e for c, e in zip(calc, calc_err)], mev,
+               baseline=[max(c - e, 0) for c, e in zip(calc, calc_err)],
+               fill=True, color=f"C{col}", alpha=0.3, lw=0, label="Monte Carlo 1 sigma")
     top.set(yscale="log", title=f"{name} leakage, OKTAVIAN {LABEL}",
             ylabel=f"leakage {units}\nper source neutron")
     if name == "Photon":
         top.stairs(g_target, mev, color="C2", ls="--", label="of which target gammas")
     top.legend()
+    median_err, max_err = mc_error(calc, calc_err)
     top.text(0.02, 0.03,
              f"chi2/N = {fit['chi2/N']:.3g} ({fit['bins']} bins)\n"
              f"integral C/E = {fit['integral C/E']:.3f}\n"
-             f"bin deviation (rms ln C/E) = {fit['bin deviation']:.0f}%",
+             f"bin deviation (rms ln C/E) = {fit['bin deviation']:.0f}%\n"
+             f"MC error per bin: median {100 * median_err:.1f}%, max {100 * max_err:.1f}%",
              transform=top.transAxes, fontsize=9, va="bottom",
              bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "grey"})
     bottom.stairs([c / m if m > 0 else math.nan for c, m in zip(calc, meas)], mev,
                   color=f"C{col}")
+    bottom.stairs([(c + e) / m if m > 0 else math.nan for c, e, m in zip(calc, calc_err, meas)],
+                  mev, baseline=[(c - e) / m if m > 0 else math.nan
+                                 for c, e, m in zip(calc, calc_err, meas)],
+                  fill=True, color=f"C{col}", alpha=0.3, lw=0)
     bottom.axhline(1, color="grey", lw=0.8)
     bottom.set(ylim=(0, 2), ylabel="C/E", xlabel=f"{name.lower()} energy (MeV)")
     if log_x:
@@ -318,9 +335,15 @@ out = HERE / "results" / f"oktavian_{'_'.join(ELEMENTS).lower()}.png"
 out.parent.mkdir(exist_ok=True)
 fig.savefig(out, dpi=150)
 
-for name, fit, energies in (("neutrons", n_fit, "0.1-20 MeV"),
-                             ("photons", g_fit, "0.5-11 MeV")):
+for name, fit, energies, calc, calc_err in (
+        ("neutrons", n_fit, "0.1-20 MeV", n_calc, n_calc_err),
+        ("photons", g_fit, "0.5-11 MeV", g_calc, g_calc_err)):
+    median_err, max_err = mc_error(calc, calc_err)
     print(f"{name} {energies}: integral C/E {fit['integral C/E']:.3f}, "
           f"chi2/N {fit['chi2/N']:.3g} over {fit['bins']} bins, "
-          f"bin deviation {fit['bin deviation']:.0f}%")
+          f"bin deviation {fit['bin deviation']:.0f}%, "
+          f"MC error per bin median {100 * median_err:.1f}% max {100 * max_err:.1f}%")
+    if max_err > 0.05:
+        print(f"  some {name} bins have a Monte Carlo error above 5%: "
+              "increase PARTICLES for a sharper comparison")
 print(f"wrote {out}")
