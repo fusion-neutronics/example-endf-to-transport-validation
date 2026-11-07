@@ -11,9 +11,12 @@ Three evaluations are needed:
   photoatomic data, so the gammas are transported with these.
 
 Each file is looked for in the local ENDF directory, nuclear_data/ unless
---endf-dir names another, so a library you already have is used as it is.
-A file that is not there is downloaded into nuclear_data/ first, checked
-against its sha256, and from then on is read like any other local file:
+--endf-dir names another, so a copy you already have saves the download. A
+file that is not there is downloaded into nuclear_data/ first. Every file,
+found or downloaded, must match its pinned sha256, so the reference case is
+guaranteed to be exactly TENDL-2025 and ENDF/B-VIII.1. To test a different
+evaluation, pass it to run_simulation.py with --neutron-file and --label
+instead.
 
 * TENDL serves each evaluation on its own (3.9 MB for Al27).
 * The NNDC serves only whole sublibrary archives, so the archive is streamed
@@ -100,18 +103,22 @@ def download(filename, dest, url=None, archive=None):
 def local_file(filename, sha256, endf_dir, **source):
     """The path of an evaluation, downloading it into endf_dir if it is missing.
 
-    A file found in endf_dir is used as it is. A downloaded one must match its
-    pinned sha256, so a changed or truncated download is caught.
+    The file, found or downloaded, must match its pinned sha256: a different
+    release under the same name, or a truncated download, is refused.
     """
     path = next(iter(sorted(endf_dir.rglob(filename))), None)
-    if path is not None:
-        return path
-    path = endf_dir / filename
-    download(filename, path, **source)
+    downloaded = path is None
+    if downloaded:
+        path = endf_dir / filename
+        download(filename, path, **source)
     found = hashlib.sha256(path.read_bytes()).hexdigest()
     if sha256 and found != sha256:
-        path.unlink()
-        raise SystemExit(f"{filename} downloaded with sha256 {found}, expected {sha256}")
+        if downloaded:
+            path.unlink()
+        raise SystemExit(
+            f"{path} has sha256 {found}, expected {sha256}: it is not the pinned "
+            "evaluation. To test a different evaluation, pass it to run_simulation.py "
+            "with --neutron-file and --label.")
     if not sha256:
         print(f"  {filename} has sha256 {found}: check it, then pin it in this script")
     return path

@@ -262,8 +262,7 @@ def cases_from_args(args):
     if args.neutron_file:
         nuclide, arrow = convert_user_file(args.neutron_file)
         path = pathlib.Path(args.neutron_file).expanduser().resolve()
-        label = args.label or path.name
-        cases.append((label, {"file": str(path), "sha256": sha256_of(path)},
+        cases.append((args.label, {"file": str(path), "sha256": sha256_of(path)},
                       {nuclide: str(arrow)}))
     else:
         default = HERE / "data" / "tendl-2025" / "neutron"
@@ -271,7 +270,7 @@ def cases_from_args(args):
         if missing:
             raise SystemExit(f"no converted data for {', '.join(missing)} in {default}: "
                              "run convert_to_arrow.py first, or pass --neutron-file")
-        cases.append(("TENDL-2025 (from ENDF)",
+        cases.append(("TENDL-2025",
                       {"library": "tendl-2025", "converted_by": "convert_to_arrow.py",
                        "arrow": str(default)},
                       {n: str(default / f"{n}.arrow") for n in COMPOSITION}))
@@ -406,7 +405,8 @@ def main():
                         help="an ENDF-6 neutron evaluation to test, of a nuclide in the "
                              f"sample ({', '.join(COMPOSITION)}); default: the TENDL-2025 "
                              "file converted by convert_to_arrow.py")
-    parser.add_argument("--label", help="legend label for --neutron-file (default: its name)")
+    parser.add_argument("--label", help="name of the --neutron-file evaluation in the "
+                                        "legend, table and JSON (required with it)")
     parser.add_argument("--compare", nargs="*", default=[], metavar="LIBRARY",
                         help="reference libraries to overlay, by yamc keyword: "
                              + ", ".join(LIBRARIES))
@@ -414,6 +414,8 @@ def main():
                         help=f"source neutrons per case (default: {PARTICLES:.0e})")
     parser.add_argument("--output-dir", type=pathlib.Path, default=HERE / "results")
     args = parser.parse_args()
+    if args.neutron_file and not args.label:
+        parser.error("--neutron-file needs --label, the name to show for it")
 
     cases = cases_from_args(args)
     source_edges, source_probs = source_spectrum()

@@ -43,7 +43,7 @@ python run_simulation.py     # transport, comparison, results/oktavian_al.png
 The plot above is
 
 ```bash
-python run_simulation.py --compare endf-b8.1
+python run_simulation.py --compare endf-b8.1 jeff-4.0
 ```
 
 The first case, the evaluation under test, is drawn thick and on top; the
@@ -61,6 +61,8 @@ python run_simulation.py \
     --compare tendl-2025 endf-b8.1 jeff-4.0 jendl-5.0 fendl-3.2d
 ```
 
+* `--label` is required with it: it is the name shown in the legend, the
+  table and the JSON. The file itself is recorded there by path and sha256.
 * The file can have any name. It is processed with NJOY (294 K) on the first
   run, and the conversion is cached by the file's sha256, so a changed file is
   converted again and an unchanged one is not.
@@ -99,8 +101,11 @@ are missing, about 6 MB in all, checking each against a pinned sha256:
   only publishes whole sublibrary archives, so the archive is streamed and the
   download stops once the Al file has been read (1.8 MB and 20 kB).
 
-Once downloaded they are ordinary local files. To use a library you already
-have instead, point the script at it; it is searched recursively by file name:
+Once downloaded they are ordinary local files. If you already have copies,
+point the script at them to skip the download; the directory is searched
+recursively by file name. Every file, local or downloaded, must match its
+pinned sha256, so the default case is always exactly TENDL-2025. To test a
+different evaluation, use `--neutron-file` (below).
 
 ```bash
 python convert_to_arrow.py --endf-dir ~/nuclear_data
