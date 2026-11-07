@@ -238,19 +238,58 @@ target_model = yamc.Model(
 target_results = target_model.simulate_transport(total_particles=PARTICLES // 5)
 
 path = R_BIG - OUTER_RADIUS / 2
-n_calc = [m / path / math.log(hi / lo)
-          for m, lo, hi in zip(results[neutron_tally].mean, n_edges, n_edges[1:])]
-g_target = [TARGET_PHOTONS_PER_NEUTRON * m / path / ((hi - lo) / 1e6)
-            for m, lo, hi in zip(target_results[target_tally].mean, g_edges, g_edges[1:])]
-g_calc = [t + m / path / ((hi - lo) / 1e6)
-          for t, m, lo, hi in zip(g_target, results[photon_tally].mean, g_edges, g_edges[1:])]
+n_width = [math.log(hi / lo) for lo, hi in zip(n_edges, n_edges[1:])]  # lethargy
+g_width = [(hi - lo) / 1e6 for lo, hi in zip(g_edges, g_edges[1:])]  # MeV
+
+
+def per_bin(result, widths, scale=1.0):
+    """Tally mean and standard deviation as leakage per bin width."""
+    mean = [scale * m / path / w for m, w in zip(result.mean, widths)]
+    std = [scale * d / path / w for d, w in zip(result.standard_deviation, widths)]
+    return mean, std
+
+
+n_calc, n_calc_err = per_bin(results[neutron_tally], n_width)
+g_target, g_target_err = per_bin(target_results[target_tally], g_width,
+                                 TARGET_PHOTONS_PER_NEUTRON)
+g_neut, g_neut_err = per_bin(results[photon_tally], g_width)
+g_calc = [a + b for a, b in zip(g_neut, g_target)]
+g_calc_err = [math.hypot(a, b) for a, b in zip(g_neut_err, g_target_err)]
+
+
+def goodness_of_fit(calc, calc_err, meas, meas_err, widths):
+    """Three measures of how well the calculation matches the measurement.
+
+    * chi2/N: the mean over bins of ((C - E) / sigma)^2, with sigma the
+      experimental and Monte Carlo uncertainties added in quadrature. 1 means
+      agreement within the quoted errors. The neutron errors are counting
+      statistics only, a fraction of a percent near the peak, so the neutron
+      chi2/N is large even where C/E looks close to 1; read it alongside the
+      other two.
+    * Integral C/E: total calculated over total measured leakage in the range.
+    * Bin deviation: the root mean square of ln(C/E) over the bins, as a
+      percentage, so a bin 20% high and one 20% low count the same.
+    Bins where either value is zero or negative are skipped.
+    """
+    pairs = [(c, ce, e, ee) for c, ce, e, ee in zip(calc, calc_err, meas, meas_err)
+             if c > 0 and e > 0]
+    chi2 = sum((c - e) ** 2 / (ce ** 2 + ee ** 2) for c, ce, e, ee in pairs) / len(pairs)
+    integral = (sum(c * w for c, w in zip(calc, widths))
+                / sum(e * w for e, w in zip(meas, widths)))
+    rms = math.sqrt(sum(math.log(c / e) ** 2 for c, _, e, _ in pairs) / len(pairs))
+    return {"chi2/N": chi2, "integral C/E": integral, "bin deviation": 100 * rms,
+            "bins": len(pairs)}
+
+
+n_fit = goodness_of_fit(n_calc, n_calc_err, n_meas, n_err, n_width)
+g_fit = goodness_of_fit(g_calc, g_calc_err, g_meas, g_err, g_width)
 
 # Plot: spectra on top, calculated / experiment below.
 fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharex="col",
                          gridspec_kw={"height_ratios": [3, 1]})
-for col, (name, edges, calc, meas, err, units, log_x) in enumerate([
-    ("Neutron", n_edges, n_calc, n_meas, n_err, "per unit lethargy", True),
-    ("Photon", g_edges, g_calc, g_meas, g_err, "per MeV", False),
+for col, (name, edges, calc, meas, err, units, log_x, fit) in enumerate([
+    ("Neutron", n_edges, n_calc, n_meas, n_err, "per unit lethargy", True, n_fit),
+    ("Photon", g_edges, g_calc, g_meas, g_err, "per MeV", False, g_fit),
 ]):
     mev = [e / 1e6 for e in edges]
     mid = [(a + b) / 2 for a, b in zip(mev, mev[1:])]
@@ -262,6 +301,12 @@ for col, (name, edges, calc, meas, err, units, log_x) in enumerate([
     if name == "Photon":
         top.stairs(g_target, mev, color="C2", ls="--", label="of which target gammas")
     top.legend()
+    top.text(0.02, 0.03,
+             f"chi2/N = {fit['chi2/N']:.3g} ({fit['bins']} bins)\n"
+             f"integral C/E = {fit['integral C/E']:.3f}\n"
+             f"bin deviation (rms ln C/E) = {fit['bin deviation']:.0f}%",
+             transform=top.transAxes, fontsize=9, va="bottom",
+             bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "grey"})
     bottom.stairs([c / m if m > 0 else math.nan for c, m in zip(calc, meas)], mev,
                   color=f"C{col}")
     bottom.axhline(1, color="grey", lw=0.8)
@@ -273,10 +318,9 @@ out = HERE / "results" / f"oktavian_{'_'.join(ELEMENTS).lower()}.png"
 out.parent.mkdir(exist_ok=True)
 fig.savefig(out, dpi=150)
 
-n_c = sum(c * math.log(b / a) for c, a, b in zip(n_calc, n_edges, n_edges[1:]))
-n_e = sum(c * math.log(b / a) for c, a, b in zip(n_meas, n_edges, n_edges[1:]))
-g_c = sum(c * (b - a) / 1e6 for c, a, b in zip(g_calc, g_edges, g_edges[1:]))
-g_e = sum(c * (b - a) / 1e6 for c, a, b in zip(g_meas, g_edges, g_edges[1:]))
-print(f"neutrons leaking 0.1-20 MeV: C {n_c:.4f}  E {n_e:.4f}  C/E {n_c / n_e:.3f}")
-print(f"photons leaking 0.5-11 MeV:  C {g_c:.4f}  E {g_e:.4f}  C/E {g_c / g_e:.3f}")
+for name, fit, energies in (("neutrons", n_fit, "0.1-20 MeV"),
+                             ("photons", g_fit, "0.5-11 MeV")):
+    print(f"{name} {energies}: integral C/E {fit['integral C/E']:.3f}, "
+          f"chi2/N {fit['chi2/N']:.3g} over {fit['bins']} bins, "
+          f"bin deviation {fit['bin deviation']:.0f}%")
 print(f"wrote {out}")

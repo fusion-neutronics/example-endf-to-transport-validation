@@ -56,6 +56,21 @@ your machine into `downloads/` and checked against a pinned sha256.
   unambiguously a dropped digit is corrected, with the reasoning given in
   `run_simulation.py`.
 
+## Goodness of fit
+
+Each panel of the plot, and the script's output, gives three numbers:
+
+* **chi2/N**: the mean over bins of ((C - E) / sigma)^2, with the experimental
+  and Monte Carlo uncertainties added in quadrature. 1 means agreement within
+  the quoted errors. The measured neutron errors are counting statistics only
+  (a fraction of a percent near the peak), and neither spectrum is folded with
+  the detector's energy resolution, so expect values well above 1 even for a
+  good evaluation. It is most useful for comparing two libraries on the same
+  model.
+* **integral C/E**: total calculated over total measured leakage.
+* **bin deviation**: the root mean square of ln(C/E) over the bins, as a
+  percentage.
+
 ## What the comparison includes, and what it leaves out
 
 To keep this to one isotope, the model leaves out the 0.2 cm SUS-304 vessel
