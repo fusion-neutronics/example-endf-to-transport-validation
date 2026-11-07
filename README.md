@@ -91,7 +91,7 @@ Also worth knowing:
 
 * The tritium target's own gamma rays (0.0862 per source neutron, Table 3.1 of
   the report) reach the detector too. They are transported through the sphere
-  in a second run and included (the dashed line).
+  in a second, photon-only run and added to the calculated photon spectrum.
 * The gamma measurement counted photons arriving within 69 ns of the source
   pulse. yamc runs to steady state, so slow capture gammas are included.
 * yamc has no surface current tally, so leakage is tallied as track-length

@@ -309,8 +309,6 @@ for col, (name, edges, calc, calc_err, meas, err, units, log_x, fit) in enumerat
                fill=True, color=f"C{col}", alpha=0.3, lw=0, label="Monte Carlo 1 sigma")
     top.set(yscale="log", title=f"{name} leakage, OKTAVIAN {LABEL}",
             ylabel=f"leakage {units}\nper source neutron")
-    if name == "Photon":
-        top.stairs(g_target, mev, color="C2", ls="--", label="of which target gammas")
     top.legend()
     median_err, max_err = mc_error(calc, calc_err)
     top.text(0.02, 0.03,
