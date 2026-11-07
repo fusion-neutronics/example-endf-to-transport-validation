@@ -27,7 +27,9 @@ rustc-ice-*.txt
 __pycache__/
 .venv/
 
-# Everything downloaded or generated on your machine: evaluations, Arrow data,
-# OKTAVIAN measurements. None of it is redistributed by this repository.
+# Everything downloaded or generated on your machine: the ENDF evaluations,
+# the Arrow data and the OKTAVIAN measurements. None of it is redistributed by
+# this repository.
+nuclear_data/
 downloads/
 data/

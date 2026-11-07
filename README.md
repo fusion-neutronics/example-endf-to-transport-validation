@@ -42,13 +42,28 @@ The transport takes about a second for a million source neutrons.
 
 ## Where the data comes from
 
-Nothing third party is stored in this repository. Each input is downloaded on
-your machine into `downloads/` and checked against a pinned sha256.
+No third-party data is stored in this repository. `convert_to_arrow.py` looks
+for each ENDF evaluation in `nuclear_data/` and downloads only the files that
+are missing, about 6 MB in all, checking each against a pinned sha256:
 
-* **TENDL-2025** neutron sublibrary, `tendl.imperial.ac.uk`. TENDL publishes it
-  as one archive of about 3.5 GB, so the first run downloads all of it and
-  extracts only `n-Al027.tendl`.
-* **ENDF/B-VIII.1** photoatomic and atomic relaxation sublibraries, NNDC.
+* `n-Al027.tendl`: **TENDL-2025** neutron evaluation of Al27 (CC-BY-4.0,
+  A.J. Koning et al.), downloaded on its own from `tendl.imperial.ac.uk`
+  (3.9 MB).
+* `photoat-013_Al_000.endf` and `atom-013_Al_000.endf`: **ENDF/B-VIII.1**
+  photoatomic and atomic relaxation evaluations of Al from the NNDC. The NNDC
+  only publishes whole sublibrary archives, so the archive is streamed and the
+  download stops once the Al file has been read (1.8 MB and 20 kB).
+
+Once downloaded they are ordinary local files. To use a library you already
+have instead, point the script at it; it is searched recursively by file name:
+
+```bash
+python convert_to_arrow.py --endf-dir ~/nuclear_data
+```
+
+The measurements are downloaded by `run_simulation.py` into `downloads/` and
+checked against pinned sha256 values:
+
 * **OKTAVIAN measurements**, JAERI-M 94-014 (Maekawa et al., 1994, chapters 3
   and 4), from the FENDL-2 benchmark sublibrary as mirrored by the OECD/NEA.
   The files are scanned report pages. The script undoes the OCR substitutions
