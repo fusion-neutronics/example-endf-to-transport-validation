@@ -16,7 +16,9 @@ with a measured benchmark experiment comes out.
    the photons they produce are transported, and the spectra leaking out of the
    sphere are tallied.
 3. **Validation.** Both leakage spectra are plotted against the measurement,
-   with calculated over experimental (C/E) ratios.
+   with calculated over experimental (C/E) ratios, goodness-of-fit numbers
+   and the Monte Carlo statistical error, alongside any reference libraries
+   you ask for.
 
 ![OKTAVIAN Al comparison](results/oktavian_al.png)
 
@@ -38,7 +40,48 @@ python convert_to_arrow.py   # ENDF -> Arrow, once
 python run_simulation.py     # transport, comparison, results/oktavian_al.png
 ```
 
-The transport takes about a second for a million source neutrons.
+The plot above is
+
+```bash
+python run_simulation.py --compare endf-b8.1 jeff-4.0 jendl-5.0 fendl-3.2d
+```
+
+Each case is 10 million source neutrons, about 5 seconds.
+
+## Testing your own evaluation
+
+Pass any ENDF-6 neutron evaluation of Al27, such as one freshly produced by
+TALYS, and the reference libraries to compare it against:
+
+```bash
+python run_simulation.py \
+    --neutron-file path/to/my-Al27.endf --label "new evaluation" \
+    --compare tendl-2025 endf-b8.1 jeff-4.0 jendl-5.0 fendl-3.2d
+```
+
+* The file can have any name. It is processed with NJOY (294 K) on the first
+  run, and the conversion is cached by the file's sha256, so a changed file is
+  converted again and an unchanged one is not.
+* `--compare` takes yamc library keywords: `tendl-2025`, `tendl-2017`,
+  `endf-b8.1`, `jeff-4.0`, `jendl-5.0` and `fendl-3.2d`. yamc downloads the
+  processed Al27 data for each on first use.
+* Every case uses the same geometry, source and ENDF/B-VIII.1 photon
+  interaction data, so the differences between the curves come from the
+  neutron evaluation alone.
+* `--particles` sets the histories per case, and `--output-dir` where the
+  results go.
+
+Besides the plot, each run writes `results/oktavian_al.json`, for another
+program to read. For every case it holds:
+* where the data came from: the file path and its sha256, or the library
+  keyword;
+* the neutron and photon leakage spectra and their Monte Carlo errors;
+* C/E per bin;
+* chi2/N, the integral C/E, the bin deviation, and the median and largest
+  Monte Carlo error.
+
+It also holds the measured spectra with their bin edges and units, and the
+yamc version.
 
 ## Where the data comes from
 
@@ -73,7 +116,8 @@ checked against pinned sha256 values:
 
 ## Goodness of fit
 
-Each panel of the plot, and the script's output, gives three numbers:
+Each panel of the plot, the script's output and the JSON give these, per
+library:
 
 * **chi2/N**: the mean over bins of ((C - E) / sigma)^2, with the experimental
   and Monte Carlo uncertainties added in quadrature. 1 means agreement within
@@ -85,6 +129,8 @@ Each panel of the plot, and the script's output, gives three numbers:
 * **integral C/E**: total calculated over total measured leakage.
 * **bin deviation**: the root mean square of ln(C/E) over the bins, as a
   percentage.
+* **Monte Carlo error**: the shaded band on each curve is +/- 1 sigma. The
+  script warns when any bin is above 5% and says to raise `--particles`.
 
 ## What the comparison includes, and what it leaves out
 
@@ -99,14 +145,15 @@ walls. Those walls would bring in Cr, Fe and Ni.
 (C/E of the integrated leakage.) The walls matter, mostly through extra
 inelastic scattering and gamma production, so the low photon and low neutron
 continuum here are largely the simplified model, not TENDL. Running the same
-model with ENDF/B-VIII.1 Al27 instead gives 1.02, 0.78 and 0.77, so the two
-libraries are close for aluminium.
+model with ENDF/B-VIII.1 Al27 instead gives 1.02, 0.78 and 0.77. The walls
+affect every library equally, so they do not change how the libraries rank
+against each other.
 
 Also worth knowing:
 
 * The tritium target's own gamma rays (0.0862 per source neutron, Table 3.1 of
   the report) reach the detector too. They are transported through the sphere
-  in a second run and included (the dashed line).
+  in a second, photon-only run and added to every library's photon spectrum.
 * The gamma measurement counted photons arriving within 69 ns of the source
   pulse. yamc runs to steady state, so slow capture gammas are included.
 * yamc has no surface current tally, so leakage is tallied as track-length

@@ -1,19 +1,41 @@
 """Step 2: simulate the OKTAVIAN Al sphere and compare with the measurement.
 
-A 14 MeV D-T source (the measured spectrum, from the authors' MCNP deck) sits
-at the centre of a hollow aluminium sphere (inner radius 10.2 cm, outer 19.75
-cm, apparent density 1.223 g/cm3, with the beam duct along +x), exactly as in
-the authors' MCNP deck. Neutrons and the photons they produce are transported,
-and the neutron and photon spectra leaking out of the sphere are compared with
-the measured ones. The gamma rays the tritium target emits itself (0.0862 per
-source neutron, Table 3.1) also reach the detector, so they are transported
-through the sphere in a second, photon-only run and added.
+    python run_simulation.py
+    python run_simulation.py --neutron-file my-evaluations/n-Al027.endf --label "TALYS test 3"
+    python run_simulation.py --neutron-file my.endf --compare tendl-2025 endf-b8.1 jeff-4.0
+
+Without options the evaluation under test is TENDL-2025 Al27, converted from
+ENDF by convert_to_arrow.py. --neutron-file swaps in any other ENDF-6
+evaluation of Al27 (a freshly produced one, for example): it is processed
+with NJOY here, and the conversion is cached by the file's sha256, so editing
+the file and rerunning converts it again. --compare overlays reference
+libraries, fetched by yamc by keyword (tendl-2025, tendl-2017, endf-b8.1,
+jeff-4.0, jendl-5.0, fendl-3.2d). Every case uses the same model, source and
+ENDF/B-VIII.1 photon interaction data, so the differences between the curves
+come from the neutron evaluation alone.
+
+Writes results/oktavian_al.png and results/oktavian_al.json. The JSON holds,
+for every case, where its data came from (file path and sha256, or library
+keyword), the calculated spectra with their Monte Carlo errors, C/E per bin
+and the goodness-of-fit numbers, plus the measurement itself, so another
+program can read the comparison without parsing the console.
+
+The model: a 14 MeV D-T source (the measured spectrum, from the authors' MCNP
+deck) sits at the centre of a hollow aluminium sphere (inner radius 10.2 cm,
+outer 19.75 cm, apparent density 1.223 g/cm3, with the beam duct along +x),
+exactly as in the authors' MCNP deck. Neutrons and the photons they produce
+are transported, and the neutron and photon spectra leaking out of the sphere
+are compared with the measured ones. The gamma rays the tritium target emits
+itself (0.0862 per source neutron, Table 3.1) also reach the detector, so they
+are transported through the sphere in a separate photon-only run and added to
+every case's photon spectrum.
 
 Simplifications, to keep this to one isotope (Al27):
 * The thin SUS-304 vessel walls (0.2 cm) are left out (treated as void).
   They add Cr, Fe and Ni and about 0.05 photons per source neutron to the
   leakage (roughly 13% of the measured photon leakage), so the calculated
-  photon spectrum here is expected to sit low.
+  photon spectrum here is expected to sit low. This affects every library
+  equally, so comparisons between libraries are unaffected.
 * yamc runs to steady state, while the gamma measurement gated out photons
   arriving later than 69 ns, so slow capture gammas are included here.
 
@@ -28,8 +50,8 @@ Where each spectrum comes from (all JAERI-M 94-014, downloaded at run time):
 
 To change the element or material, edit only the block marked "WHAT TO CHANGE
 FOR ANOTHER SPHERE" below, and convert the new evaluations first by editing
-MEMBERS in convert_to_arrow.py. Issue #1 lists every OKTAVIAN sphere with its
-vessel, density and source table.
+NEUTRON_FILES and PHOTON_FILES in convert_to_arrow.py. Issue #1 lists every
+OKTAVIAN sphere with its vessel, density and source table.
 
 Leakage is tallied as track-length flux in a void shell from the sphere out to
 R_BIG with a vacuum boundary there. Leaking particles cross it once and never
@@ -37,9 +59,12 @@ return, each with path length R_BIG - R to within R/R_BIG, so dividing by
 R_BIG gives the leakage current per source neutron.
 """
 
+import argparse
 import hashlib
+import json
 import math
 import pathlib
+import shutil
 import urllib.request
 
 import matplotlib
@@ -65,6 +90,7 @@ COMPOSITION = {"Al27": 1.0}
 DENSITY = 1.223  # g/cm3
 ELEMENTS = ["Al"]  # one photon data file per element
 LABEL = "Al sphere"
+CASE = "al"  # used in the output file names
 
 # The sphere (cm). Al used the 40 cm Type-II vessel: a 20 cm central void,
 # the sample from 10.2 to 19.75 cm, and a re-entrant beam duct of radius 5.75
@@ -92,6 +118,16 @@ MEASURED_PINS = {
 
 R_BIG = 1.0e5
 PARTICLES = 10_000_000
+
+# Display names for the library keywords yamc can fetch.
+LIBRARIES = {
+    "tendl-2025": "TENDL-2025",
+    "tendl-2017": "TENDL-2017",
+    "endf-b8.1": "ENDF/B-VIII.1",
+    "jeff-4.0": "JEFF-4.0",
+    "jendl-5.0": "JENDL-5.0",
+    "fendl-3.2d": "FENDL-3.2d",
+}
 
 # The measurements (FENDL-2 benchmark sublibrary, NEA mirror), pinned by sha256.
 OKTAVIAN = ("https://www.oecd-nea.org/dbforms/data/eva/evatapes/fendl_20/"
@@ -185,165 +221,279 @@ def measured_photons():
         [r[2] for r in table], [r[3] for r in table]
 
 
-# Material: neutron data from TENDL-2025 per nuclide, photon data from
-# ENDF/B-VIII.1 per element, both as converted by convert_to_arrow.py.
-sample = yamc.Material(COMPOSITION, DENSITY, temperature=294, name=LABEL)
-sample.read_nuclear_data(
-    {n: str(HERE / f"data/tendl-2025/neutron/{n}.arrow") for n in COMPOSITION},
-    photon_data={e: str(HERE / f"data/endf-b8.1/photon/{e}.arrow") for e in ELEMENTS},
-)
+# ---------------------------------------------------------------------------
+# Where each case's neutron data comes from
+# ---------------------------------------------------------------------------
 
-# Geometry: the surfaces of the authors' MCNP deck (Fig. 4.21), vessel walls
-# left out.
-inner = yamc.Sphere(radius=INNER_RADIUS)
-outer = yamc.Sphere(radius=OUTER_RADIUS)
-world = yamc.Sphere(radius=R_BIG, boundary="vacuum")
-duct = yamc.Cylinder("x", y0=0.0, z0=0.0, radius=DUCT_RADIUS)
-duct_start = yamc.Plane("x", offset=DUCT_START)
-in_duct = duct.below & duct_start.above
+def sha256_of(path):
+    return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
 
-sphere = yamc.Cell(inner.above & outer.below & ~in_duct, material=sample, name=LABEL)
-cavity = yamc.Cell(inner.below | (in_duct & outer.below), name="cavity and duct")
-shell = yamc.Cell(outer.above & world.below, name="leakage shell")
-geometry = yamc.Geometry([sphere, cavity, shell])
 
-# The source spectrum, and the measured spectra whose bins the tallies reuse,
-# so calculation and measurement are compared bin for bin.
-source_edges, source_probs = source_spectrum()
-n_edges, n_meas, n_err = measured_neutrons()
-g_edges, g_meas, g_err = measured_photons()
+def convert_user_file(endf_path):
+    """Convert an ENDF-6 neutron evaluation to Arrow, cached by its sha256.
 
-neutron_tally = yamc.Tally(scores=["flux"], cells=shell, particle="neutron",
-                           energy_bins=n_edges)
-photon_tally = yamc.Tally(scores=["flux"], cells=shell, particle="photon",
-                          energy_bins=g_edges)
-model = yamc.Model(
-    geometry=geometry,
-    tallies=[neutron_tally, photon_tally],
-    source=yamc.NeutronSource(position=(0, 0, 0),
-                              energy=yamc.sources.Histogram(source_edges, source_probs)),
-    transport_secondary_photons=True,
-)
-results = model.simulate_transport(total_particles=PARTICLES)
+    Returns ``(nuclide, arrow_path)``. The cache key is the file's content,
+    not its name, so a re-evaluated file with the same name is converted
+    again rather than silently reusing the old conversion.
+    """
+    endf_path = pathlib.Path(endf_path).expanduser().resolve()
+    if not endf_path.is_file():
+        raise SystemExit(f"--neutron-file {endf_path} does not exist")
+    out_dir = HERE / "data" / "user" / sha256_of(endf_path)[:16]
+    existing = sorted(out_dir.glob("*.arrow"))
+    if not existing:
+        print(f"converting {endf_path} (NJOY, 294 K)")
+        written = yamc.convert_neutron_transport(
+            str(endf_path), str(out_dir), njoy_exec=shutil.which("njoy") or "njoy",
+            temperatures=[294.0], library=f"user:{endf_path.name}")
+        existing = [pathlib.Path(written)]
+    arrow = existing[0]
+    nuclide = arrow.name.removesuffix(".arrow")
+    if nuclide not in COMPOSITION:
+        raise SystemExit(
+            f"{endf_path.name} is an evaluation of {nuclide}, but the {LABEL} needs "
+            f"{', '.join(COMPOSITION)}. Pass an evaluation of a nuclide in the sample.")
+    return nuclide, arrow
 
-target_edges, target_probs = target_photons()
-target_tally = yamc.Tally(scores=["flux"], cells=shell, particle="photon",
-                          energy_bins=g_edges)
-target_model = yamc.Model(
-    geometry=geometry,
-    tallies=[target_tally],
-    source=yamc.PhotonSource(position=(0, 0, 0),
-                             energy=yamc.sources.Histogram(target_edges, target_probs)),
-)
-target_results = target_model.simulate_transport(total_particles=PARTICLES // 5)
 
-path = R_BIG - OUTER_RADIUS / 2
-n_width = [math.log(hi / lo) for lo, hi in zip(n_edges, n_edges[1:])]  # lethargy
-g_width = [(hi - lo) / 1e6 for lo, hi in zip(g_edges, g_edges[1:])]  # MeV
+def cases_from_args(args):
+    """The list of (label, source description, nuclide -> data) to simulate."""
+    cases = []
+    if args.neutron_file:
+        nuclide, arrow = convert_user_file(args.neutron_file)
+        path = pathlib.Path(args.neutron_file).expanduser().resolve()
+        label = args.label or path.name
+        cases.append((label, {"file": str(path), "sha256": sha256_of(path)},
+                      {nuclide: str(arrow)}))
+    else:
+        default = HERE / "data" / "tendl-2025" / "neutron"
+        missing = [n for n in COMPOSITION if not (default / f"{n}.arrow").exists()]
+        if missing:
+            raise SystemExit(f"no converted data for {', '.join(missing)} in {default}: "
+                             "run convert_to_arrow.py first, or pass --neutron-file")
+        cases.append(("TENDL-2025 (from ENDF)",
+                      {"library": "tendl-2025", "converted_by": "convert_to_arrow.py",
+                       "arrow": str(default)},
+                      {n: str(default / f"{n}.arrow") for n in COMPOSITION}))
+    for keyword in args.compare:
+        cases.append((LIBRARIES.get(keyword, keyword), {"library": keyword},
+                      {n: keyword for n in COMPOSITION}))
+    return cases
+
+
+# ---------------------------------------------------------------------------
+# The model
+# ---------------------------------------------------------------------------
+
+def build_model(neutron_data):
+    """The sphere filled with the sample, loaded from ``neutron_data``.
+
+    ``neutron_data`` maps each nuclide to an Arrow path or a library keyword.
+    The photon interaction data is always the ENDF/B-VIII.1 conversion from
+    convert_to_arrow.py, so only the neutron data differs between cases.
+    """
+    sample = yamc.Material(COMPOSITION, DENSITY, temperature=294, name=LABEL)
+    sample.read_nuclear_data(
+        neutron_data,
+        photon_data={e: str(HERE / f"data/endf-b8.1/photon/{e}.arrow") for e in ELEMENTS},
+    )
+    # The surfaces of the authors' MCNP deck (Fig. 4.21), vessel walls left out.
+    inner = yamc.Sphere(radius=INNER_RADIUS)
+    outer = yamc.Sphere(radius=OUTER_RADIUS)
+    world = yamc.Sphere(radius=R_BIG, boundary="vacuum")
+    duct = yamc.Cylinder("x", y0=0.0, z0=0.0, radius=DUCT_RADIUS)
+    duct_start = yamc.Plane("x", offset=DUCT_START)
+    in_duct = duct.below & duct_start.above
+    sphere = yamc.Cell(inner.above & outer.below & ~in_duct, material=sample, name=LABEL)
+    cavity = yamc.Cell(inner.below | (in_duct & outer.below), name="cavity and duct")
+    shell = yamc.Cell(outer.above & world.below, name="leakage shell")
+    return yamc.Geometry([sphere, cavity, shell]), shell
 
 
 def per_bin(result, widths, scale=1.0):
     """Tally mean and standard deviation as leakage per bin width."""
+    path = R_BIG - OUTER_RADIUS / 2
     mean = [scale * m / path / w for m, w in zip(result.mean, widths)]
     std = [scale * d / path / w for d, w in zip(result.standard_deviation, widths)]
     return mean, std
 
 
-n_calc, n_calc_err = per_bin(results[neutron_tally], n_width)
-g_target, g_target_err = per_bin(target_results[target_tally], g_width,
-                                 TARGET_PHOTONS_PER_NEUTRON)
-g_neut, g_neut_err = per_bin(results[photon_tally], g_width)
-g_calc = [a + b for a, b in zip(g_neut, g_target)]
-g_calc_err = [math.hypot(a, b) for a, b in zip(g_neut_err, g_target_err)]
-
-
 def goodness_of_fit(calc, calc_err, meas, meas_err, widths):
-    """Three measures of how well the calculation matches the measurement.
+    """Measures of how well a calculation matches the measurement.
 
     * chi2/N: the mean over bins of ((C - E) / sigma)^2, with sigma the
       experimental and Monte Carlo uncertainties added in quadrature. 1 means
       agreement within the quoted errors. The neutron errors are counting
       statistics only, a fraction of a percent near the peak, so the neutron
-      chi2/N is large even where C/E looks close to 1; read it alongside the
-      other two.
+      chi2/N is large even where C/E looks close to 1; it is most useful for
+      ranking libraries on the same model.
     * Integral C/E: total calculated over total measured leakage in the range.
     * Bin deviation: the root mean square of ln(C/E) over the bins, as a
       percentage, so a bin 20% high and one 20% low count the same.
+    * MC error: median and largest per-bin Monte Carlo relative error.
     Bins where either value is zero or negative are skipped.
     """
     pairs = [(c, ce, e, ee) for c, ce, e, ee in zip(calc, calc_err, meas, meas_err)
              if c > 0 and e > 0]
-    chi2 = sum((c - e) ** 2 / (ce ** 2 + ee ** 2) for c, ce, e, ee in pairs) / len(pairs)
-    integral = (sum(c * w for c, w in zip(calc, widths))
-                / sum(e * w for e, w in zip(meas, widths)))
-    rms = math.sqrt(sum(math.log(c / e) ** 2 for c, _, e, _ in pairs) / len(pairs))
-    return {"chi2/N": chi2, "integral C/E": integral, "bin deviation": 100 * rms,
-            "bins": len(pairs)}
+    rel = sorted(ce / c for c, ce, _, _ in pairs)
+    return {
+        "chi2_per_bin": sum((c - e) ** 2 / (ce ** 2 + ee ** 2)
+                            for c, ce, e, ee in pairs) / len(pairs),
+        "integral_c_over_e": (sum(c * w for c, w in zip(calc, widths))
+                              / sum(e * w for e, w in zip(meas, widths))),
+        "bin_deviation_percent": 100 * math.sqrt(
+            sum(math.log(c / e) ** 2 for c, _, e, _ in pairs) / len(pairs)),
+        "mc_error_median_percent": 100 * rel[len(rel) // 2],
+        "mc_error_max_percent": 100 * rel[-1],
+        "bins": len(pairs),
+    }
 
 
-n_fit = goodness_of_fit(n_calc, n_calc_err, n_meas, n_err, n_width)
-g_fit = goodness_of_fit(g_calc, g_calc_err, g_meas, g_err, g_width)
+def plot(experiment, results, out):
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8), sharex="col",
+                             gridspec_kw={"height_ratios": [3, 1]})
+    for col, particle in enumerate(("neutron", "photon")):
+        exp = experiment[particle]
+        mev = [e / 1e6 for e in exp["edges_ev"]]
+        mid = [(a + b) / 2 for a, b in zip(mev, mev[1:])]
+        top, bottom = axes[0][col], axes[1][col]
+        top.errorbar(mid, exp["value"], yerr=exp["error"], fmt="o", ms=3, color="black",
+                     label="OKTAVIAN measurement", zorder=5)
+        lines = []
+        for i, case in enumerate(results):
+            calc, err = case[particle]["value"], case[particle]["error"]
+            colour = f"C{i}"
+            top.stairs(calc, mev, color=colour, lw=1.4, label=case["label"])
+            # The Monte Carlo statistical error, +/- 1 sigma. If it is visibly
+            # wide anywhere, run more histories (--particles).
+            top.stairs([c + e for c, e in zip(calc, err)], mev,
+                       baseline=[max(c - e, 0) for c, e in zip(calc, err)],
+                       fill=True, color=colour, alpha=0.25, lw=0)
+            ce = case[particle]["c_over_e"]
+            bottom.stairs([math.nan if v is None else v for v in ce], mev, color=colour)
+            fit = case[particle]["fit"]
+            lines.append(f"{case['label'][:28]:28s} {fit['chi2_per_bin']:9.3g} "
+                         f"{fit['integral_c_over_e']:6.3f} {fit['bin_deviation_percent']:5.0f}%")
+        units = "per unit lethargy" if particle == "neutron" else "per MeV"
+        top.set(yscale="log", title=f"{particle.capitalize()} leakage, OKTAVIAN {LABEL}",
+                ylabel=f"leakage {units}\nper source neutron")
+        top.legend(fontsize=8, loc="upper right")
+        header = f"{'':28s} {'chi2/N':>9s} {'C/E':>6s} {'dev':>6s}"
+        top.text(0.02, 0.03, "\n".join([header] + lines), transform=top.transAxes,
+                 fontsize=7.5, family="monospace", va="bottom",
+                 bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "grey"})
+        bottom.axhline(1, color="grey", lw=0.8)
+        bottom.set(ylim=(0, 2), ylabel="C/E", xlabel=f"{particle} energy (MeV)")
+        if particle == "neutron":
+            bottom.set_xscale("log")
+    fig.text(0.01, 0.005, "Shaded bands: Monte Carlo 1 sigma.  C/E: integral of the "
+             "leakage.  dev: rms of ln(C/E) over the bins.", fontsize=8, color="grey")
+    fig.tight_layout(rect=(0, 0.02, 1, 1))
+    fig.savefig(out, dpi=150)
 
-# Plot: spectra on top, calculated / experiment below.
-fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharex="col",
-                         gridspec_kw={"height_ratios": [3, 1]})
-def mc_error(calc, calc_err):
-    """Median and largest Monte Carlo relative error (1 sigma) over scored bins."""
-    rel = sorted(e / c for c, e in zip(calc, calc_err) if c > 0)
-    return rel[len(rel) // 2], rel[-1]
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Simulate the OKTAVIAN Al sphere and compare with the measurement.")
+    parser.add_argument("--neutron-file", type=pathlib.Path,
+                        help="an ENDF-6 neutron evaluation to test, of a nuclide in the "
+                             f"sample ({', '.join(COMPOSITION)}); default: the TENDL-2025 "
+                             "file converted by convert_to_arrow.py")
+    parser.add_argument("--label", help="legend label for --neutron-file (default: its name)")
+    parser.add_argument("--compare", nargs="*", default=[], metavar="LIBRARY",
+                        help="reference libraries to overlay, by yamc keyword: "
+                             + ", ".join(LIBRARIES))
+    parser.add_argument("--particles", type=int, default=PARTICLES,
+                        help=f"source neutrons per case (default: {PARTICLES:.0e})")
+    parser.add_argument("--output-dir", type=pathlib.Path, default=HERE / "results")
+    args = parser.parse_args()
+
+    cases = cases_from_args(args)
+    source_edges, source_probs = source_spectrum()
+    n_edges, n_meas, n_err = measured_neutrons()
+    g_edges, g_meas, g_err = measured_photons()
+    n_width = [math.log(hi / lo) for lo, hi in zip(n_edges, n_edges[1:])]  # lethargy
+    g_width = [(hi - lo) / 1e6 for lo, hi in zip(g_edges, g_edges[1:])]  # MeV
+
+    # The target's own gammas never touch the neutron data, so one run serves
+    # every case. It uses the first case's model; only its photon data matters.
+    geometry, shell = build_model(cases[0][2])
+    target_edges, target_probs = target_photons()
+    target_tally = yamc.Tally(scores=["flux"], cells=shell, particle="photon",
+                              energy_bins=g_edges)
+    target_run = yamc.Model(
+        geometry=geometry, tallies=[target_tally],
+        source=yamc.PhotonSource(position=(0, 0, 0),
+                                 energy=yamc.sources.Histogram(target_edges, target_probs)),
+    ).simulate_transport(total_particles=max(args.particles // 5, 1000))
+    g_target, g_target_err = per_bin(target_run[target_tally], g_width,
+                                     TARGET_PHOTONS_PER_NEUTRON)
+
+    results = []
+    for label, source, neutron_data in cases:
+        print(f"\n=== {label}")
+        geometry, shell = build_model(neutron_data)
+        neutron_tally = yamc.Tally(scores=["flux"], cells=shell, particle="neutron",
+                                   energy_bins=n_edges)
+        photon_tally = yamc.Tally(scores=["flux"], cells=shell, particle="photon",
+                                  energy_bins=g_edges)
+        run = yamc.Model(
+            geometry=geometry, tallies=[neutron_tally, photon_tally],
+            source=yamc.NeutronSource(position=(0, 0, 0),
+                                      energy=yamc.sources.Histogram(source_edges, source_probs)),
+            transport_secondary_photons=True,
+        ).simulate_transport(total_particles=args.particles)
+        n_calc, n_calc_err = per_bin(run[neutron_tally], n_width)
+        g_neut, g_neut_err = per_bin(run[photon_tally], g_width)
+        g_calc = [a + b for a, b in zip(g_neut, g_target)]
+        g_calc_err = [math.hypot(a, b) for a, b in zip(g_neut_err, g_target_err)]
+        case = {"label": label, "source": source}
+        for particle, calc, err, meas, meas_err, widths in (
+                ("neutron", n_calc, n_calc_err, n_meas, n_err, n_width),
+                ("photon", g_calc, g_calc_err, g_meas, g_err, g_width)):
+            case[particle] = {
+                "value": calc, "error": err,
+                "c_over_e": [c / m if m > 0 else None for c, m in zip(calc, meas)],
+                "fit": goodness_of_fit(calc, err, meas, meas_err, widths),
+            }
+        results.append(case)
+
+    experiment = {
+        "neutron": {"edges_ev": n_edges, "value": n_meas, "error": n_err,
+                    "units": "leakage per unit lethargy per source neutron",
+                    "file": MEASURED_NEUTRONS},
+        "photon": {"edges_ev": g_edges, "value": g_meas, "error": g_err,
+                   "units": "leakage per MeV per source neutron",
+                   "file": MEASURED_PHOTONS},
+    }
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    png = args.output_dir / f"oktavian_{CASE}.png"
+    plot(experiment, results, png)
+    report = {
+        "benchmark": f"OKTAVIAN {LABEL} (JAERI-M 94-014)",
+        "yamc_version": yamc.__version__,
+        "source_neutrons_per_case": args.particles,
+        "photon_data": "endf-b8.1 (converted by convert_to_arrow.py), the same for every case",
+        "target_photons": {"value": g_target, "error": g_target_err,
+                           "note": "included in every case's photon spectrum"},
+        "experiment": experiment,
+        "cases": results,
+    }
+    out_json = args.output_dir / f"oktavian_{CASE}.json"
+    out_json.write_text(json.dumps(report, indent=1))
+
+    print(f"\n{'':40s} {'chi2/N':>9s} {'C/E':>7s} {'dev':>6s} {'max MC err':>10s}")
+    for case in results:
+        for particle in ("neutron", "photon"):
+            fit = case[particle]["fit"]
+            print(f"{case['label'][:30]:30s} {particle:9s} {fit['chi2_per_bin']:9.3g} "
+                  f"{fit['integral_c_over_e']:7.3f} {fit['bin_deviation_percent']:5.0f}% "
+                  f"{fit['mc_error_max_percent']:9.1f}%")
+            if fit["mc_error_max_percent"] > 5:
+                print(f"  some {particle} bins have a Monte Carlo error above 5%: "
+                      "raise --particles for a sharper comparison")
+    print(f"\nwrote {png}\nwrote {out_json}")
 
 
-for col, (name, edges, calc, calc_err, meas, err, units, log_x, fit) in enumerate([
-    ("Neutron", n_edges, n_calc, n_calc_err, n_meas, n_err, "per unit lethargy", True, n_fit),
-    ("Photon", g_edges, g_calc, g_calc_err, g_meas, g_err, "per MeV", False, g_fit),
-]):
-    mev = [e / 1e6 for e in edges]
-    mid = [(a + b) / 2 for a, b in zip(mev, mev[1:])]
-    top, bottom = axes[0][col], axes[1][col]
-    top.errorbar(mid, meas, yerr=err, fmt="o", ms=3, color="black", label="OKTAVIAN measurement")
-    top.stairs(calc, mev, color=f"C{col}", lw=1.5, label=f"yamc + TENDL-2025 {', '.join(COMPOSITION)}")
-    # The Monte Carlo statistical error, +/- 1 sigma, as a shaded band. If it is
-    # visibly wide anywhere, run more histories (PARTICLES at the top).
-    top.stairs([c + e for c, e in zip(calc, calc_err)], mev,
-               baseline=[max(c - e, 0) for c, e in zip(calc, calc_err)],
-               fill=True, color=f"C{col}", alpha=0.3, lw=0, label="Monte Carlo 1 sigma")
-    top.set(yscale="log", title=f"{name} leakage, OKTAVIAN {LABEL}",
-            ylabel=f"leakage {units}\nper source neutron")
-    if name == "Photon":
-        top.stairs(g_target, mev, color="C2", ls="--", label="of which target gammas")
-    top.legend()
-    median_err, max_err = mc_error(calc, calc_err)
-    top.text(0.02, 0.03,
-             f"chi2/N = {fit['chi2/N']:.3g} ({fit['bins']} bins)\n"
-             f"integral C/E = {fit['integral C/E']:.3f}\n"
-             f"bin deviation (rms ln C/E) = {fit['bin deviation']:.0f}%\n"
-             f"MC error per bin: median {100 * median_err:.1f}%, max {100 * max_err:.1f}%",
-             transform=top.transAxes, fontsize=9, va="bottom",
-             bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "grey"})
-    bottom.stairs([c / m if m > 0 else math.nan for c, m in zip(calc, meas)], mev,
-                  color=f"C{col}")
-    bottom.stairs([(c + e) / m if m > 0 else math.nan for c, e, m in zip(calc, calc_err, meas)],
-                  mev, baseline=[(c - e) / m if m > 0 else math.nan
-                                 for c, e, m in zip(calc, calc_err, meas)],
-                  fill=True, color=f"C{col}", alpha=0.3, lw=0)
-    bottom.axhline(1, color="grey", lw=0.8)
-    bottom.set(ylim=(0, 2), ylabel="C/E", xlabel=f"{name.lower()} energy (MeV)")
-    if log_x:
-        bottom.set_xscale("log")
-fig.tight_layout()
-out = HERE / "results" / f"oktavian_{'_'.join(ELEMENTS).lower()}.png"
-out.parent.mkdir(exist_ok=True)
-fig.savefig(out, dpi=150)
-
-for name, fit, energies, calc, calc_err in (
-        ("neutrons", n_fit, "0.1-20 MeV", n_calc, n_calc_err),
-        ("photons", g_fit, "0.5-11 MeV", g_calc, g_calc_err)):
-    median_err, max_err = mc_error(calc, calc_err)
-    print(f"{name} {energies}: integral C/E {fit['integral C/E']:.3f}, "
-          f"chi2/N {fit['chi2/N']:.3g} over {fit['bins']} bins, "
-          f"bin deviation {fit['bin deviation']:.0f}%, "
-          f"MC error per bin median {100 * median_err:.1f}% max {100 * max_err:.1f}%")
-    if max_err > 0.05:
-        print(f"  some {name} bins have a Monte Carlo error above 5%: "
-              "increase PARTICLES for a sharper comparison")
-print(f"wrote {out}")
+if __name__ == "__main__":
+    main()
