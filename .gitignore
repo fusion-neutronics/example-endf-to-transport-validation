@@ -33,3 +33,6 @@ __pycache__/
 nuclear_data/
 downloads/
 data/
+
+# The full numerical results of a run; the plot is committed for the README.
+results/*.json
