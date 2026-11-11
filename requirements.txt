@@ -5,7 +5,7 @@ njoy2016
 
 # yamc converts ENDF to Arrow (convert_neutron_transport, convert_photon) and
 # runs the coupled neutron-photon transport.
-yamc>=0.17.0
+yamc>=0.20.0
 
 # The comparison plot (brings numpy with it).
 matplotlib
